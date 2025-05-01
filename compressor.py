@@ -2,41 +2,42 @@ import fitz  # PyMuPDF
 import tempfile
 import os
 
-def compress_pdf_to_target_size(input_file, target_size_kb, max_attempts=10):
+def compress_pdf_to_target_size(input_file, target_size_kb, max_passes=10):
+    """
+    Compress the input PDF to approximately the target size (in KB).
+    Returns the path to the compressed PDF.
+    """
+    # Save uploaded file to temp file
     input_data = input_file.read()
+    temp_input = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    temp_input.write(input_data)
+    temp_input.close()
+
     best_output = None
-    best_size = float('inf')
+    best_size = float("inf")
 
-    for scale in range(10, max_attempts + 1):
-        doc = fitz.open(stream=input_data, filetype="pdf")
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    for _ in range(max_passes):
+        doc = fitz.open(temp_input.name)
+        temp_output = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
 
-        # Resize images in each page to simulate compression
-        for page in doc:
-            images = page.get_images(full=True)
-            for img_index, img in enumerate(images):
-                xref = img[0]
-                base_image = doc.extract_image(xref)
-                if base_image:
-                    pix = fitz.Pixmap(doc, xref)
-                    if pix.n > 4:  # CMYK or special
-                        pix = fitz.Pixmap(fitz.csRGB, pix)
-                    # Resize to 80% on each iteration
-                    new_pix = pix.scaled(pix.width * (1 - scale * 0.05), pix.height * (1 - scale * 0.05))
-                    doc._delete_object(xref)
-                    new_xref = doc.insert_image(page.rect, pixmap=new_pix)
-                    pix = None
-                    new_pix = None
-
-        doc.save(temp_file.name, garbage=4, deflate=True)
+        # Save with cleanup and compression options
+        doc.save(temp_output.name, garbage=4, deflate=True, clean=True)
         doc.close()
 
-        final_size_kb = os.path.getsize(temp_file.name) / 1024
-        if final_size_kb < best_size:
-            best_output = temp_file.name
-            best_size = final_size_kb
+        output_size_kb = os.path.getsize(temp_output.name) / 1024
 
-        if final_size_kb <= target_size_kb:
-            break
+        # Track smallest size so far
+        if output_size_kb < best_size:
+            best_output = temp_output.name
+            best_size = output_size_kb
+
+        if output_size_kb <= target_size_kb:
+            break  # Stop if within target
+
+        # Use output as new input for next pass
+        temp_input = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        with open(temp_output.name, "rb") as f:
+            temp_input.write(f.read())
+        temp_input.close()
 
     return best_output
