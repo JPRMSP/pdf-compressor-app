@@ -1,47 +1,38 @@
 import fitz  # PyMuPDF
 import tempfile
+import os
 
-def compress_pdf(input_file, target_size_mb):
+def compress_pdf_to_target_size(input_file, target_size_kb, max_attempts=10):
     """
-    Compresses a PDF by re-saving it with basic optimizations.
+    Compress a PDF to approximately the given target size (in KB).
 
     Parameters:
-    - input_file: Uploaded file-like object from Streamlit
-    - target_size_mb: Target file size in megabytes (approximate)
+    - input_file: file-like object (e.g. from Streamlit)
+    - target_size_kb: desired output size in kilobytes
+    - max_attempts: number of compression iterations
 
     Returns:
-    - Path to the compressed PDF file
+    - Path to the compressed PDF
     """
-    # Open the original PDF from stream
-    doc = fitz.open(stream=input_file.read(), filetype="pdf")
+    input_data = input_file.read()
+    best_output = None
+    best_size = float('inf')
 
-    # Optional: Optimize by removing unused objects
-    doc.save("temp_initial.pdf", garbage=4, deflate=True)
+    for quality in range(80, 10, -10):  # progressively lower compression quality
+        doc = fitz.open(stream=input_data, filetype="pdf")
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        
+        # compress=quality helps reduce size by applying more compression
+        doc.save(temp_file.name, garbage=4, deflate=True, compress=quality)
+        doc.close()
 
-    # Reopen to perform further optimization
-    optimized_doc = fitz.open("temp_initial.pdf")
+        final_size_kb = os.path.getsize(temp_file.name) / 1024
 
-    # Compress images by reducing their quality
-    for page_index in range(len(optimized_doc)):
-        page = optimized_doc[page_index]
-        images = page.get_images(full=True)
-        for img_index, img in enumerate(images):
-            xref = img[0]
-            try:
-                # Reduce resolution for each image (simulate recompression)
-                pix = fitz.Pixmap(optimized_doc, xref)
-                if pix.n > 4:  # contains alpha
-                    pix = fitz.Pixmap(fitz.csRGB, pix)
-                pix = fitz.Pixmap(pix, 100, 100)  # downscale
-                optimized_doc._delete_object(xref)
-                new_xref = optimized_doc.insert_image(page.rect, pixmap=pix, overlay=True)
-                pix = None
-            except Exception:
-                pass  # Skip if any image fails
+        if final_size_kb < best_size:
+            best_output = temp_file.name
+            best_size = final_size_kb
 
-    # Save to temporary file
-    temp_output = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
-    optimized_doc.save(temp_output.name, garbage=4, deflate=True)
-    optimized_doc.close()
+        if final_size_kb <= target_size_kb:
+            break  # desired size achieved
 
-    return temp_output.name
+    return best_output
